@@ -5,6 +5,10 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_EXECUTIONS } from '../shared/dynamo';
 
+function ttlInDays(days: number): number {
+  return Math.floor(Date.now() / 1000) + days * 24 * 60 * 60;
+}
+
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const jobId = event.pathParameters?.jobId;
 
@@ -46,14 +50,17 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
           timeBucket: item.timeBucket,
           executionKey: item.executionKey,
         },
-        UpdateExpression: 'SET #status = :cancelled',
+        UpdateExpression:
+          'SET #status = :cancelled, #ttlEpochSeconds = :ttl',
         ConditionExpression: '#status = :pending',
         ExpressionAttributeNames: {
           '#status': 'status',
+          '#ttlEpochSeconds': 'ttlEpochSeconds',
         },
         ExpressionAttributeValues: {
           ':cancelled': 'CANCELLED',
           ':pending': 'PENDING',
+          ':ttl': ttlInDays(7),
         },
       })
     );
