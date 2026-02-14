@@ -9,6 +9,10 @@ async function fakeExecuteJob(jobId: string) {
   console.log(`Executed job ${jobId}`);
 }
 
+function ttlInDays(days: number): number {
+  return Math.floor(Date.now() / 1000) + days * 24 * 60 * 60;
+}
+
 export const handler = async (event: SQSEvent) => {
   for (const record of event.Records) {
     const message = JSON.parse(record.body);
@@ -25,6 +29,7 @@ export const handler = async (event: SQSEvent) => {
     });
 
     try {
+      // 🔴 Too many retries → permanent failure
       if (receiveCount > MAX_ATTEMPTS) {
         console.log('Max attempts exceeded, marking permanently failed');
 
@@ -32,28 +37,40 @@ export const handler = async (event: SQSEvent) => {
           new UpdateCommand({
             TableName: TABLE_EXECUTIONS,
             Key: { timeBucket, executionKey },
-            UpdateExpression: 'SET #status = :failed',
-            ExpressionAttributeNames: { '#status': 'status' },
+            UpdateExpression:
+              'SET #status = :failed, #ttlEpochSeconds = :ttl',
+            ExpressionAttributeNames: {
+              '#status': 'status',
+              '#ttlEpochSeconds': 'ttlEpochSeconds',
+            },
             ExpressionAttributeValues: {
               ':failed': 'FAILED_PERMANENT',
+              ':ttl': ttlInDays(14),
             },
           })
         );
 
-        // Let SQS move it to DLQ
+        // Let SQS send to DLQ naturally
         return;
       }
 
+      // 🟢 Execute job
       await fakeExecuteJob(jobId);
 
+      // 🟢 Mark success
       await ddb.send(
         new UpdateCommand({
           TableName: TABLE_EXECUTIONS,
           Key: { timeBucket, executionKey },
-          UpdateExpression: 'SET #status = :succeeded',
-          ExpressionAttributeNames: { '#status': 'status' },
+          UpdateExpression:
+            'SET #status = :succeeded, #ttlEpochSeconds = :ttl',
+          ExpressionAttributeNames: {
+            '#status': 'status',
+            '#ttlEpochSeconds': 'ttlEpochSeconds',
+          },
           ExpressionAttributeValues: {
             ':succeeded': 'SUCCEEDED',
+            ':ttl': ttlInDays(7),
           },
         })
       );
@@ -62,19 +79,23 @@ export const handler = async (event: SQSEvent) => {
     } catch (err) {
       console.error('Execution failed, will retry', err);
 
+      // Keep status RUNNING for retry visibility
       await ddb.send(
         new UpdateCommand({
           TableName: TABLE_EXECUTIONS,
           Key: { timeBucket, executionKey },
           UpdateExpression: 'SET #status = :running',
-          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeNames: {
+            '#status': 'status',
+          },
           ExpressionAttributeValues: {
             ':running': 'RUNNING',
           },
         })
       );
 
-      throw err; // important: let SQS retry
+      // ❗ IMPORTANT: rethrow so SQS retries
+      throw err;
     }
   }
 };
