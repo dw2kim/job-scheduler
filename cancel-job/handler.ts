@@ -1,6 +1,6 @@
 import { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import {
-  ScanCommand,
+  QueryCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_EXECUTIONS } from '../shared/dynamo';
@@ -16,11 +16,12 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   }
 
   try {
-    // 🔎 Step 1: find execution by jobId (temporary scan)
-    const scan = await ddb.send(
-      new ScanCommand({
+    // 🔎 Step 1: Query using GSI (FAST)
+    const query = await ddb.send(
+      new QueryCommand({
         TableName: TABLE_EXECUTIONS,
-        FilterExpression: 'jobId = :jobId',
+        IndexName: 'gsi_jobId', // 👈 important
+        KeyConditionExpression: 'jobId = :jobId',
         ExpressionAttributeValues: {
           ':jobId': jobId,
         },
@@ -28,7 +29,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       })
     );
 
-    const item = scan.Items?.[0];
+    const item = query.Items?.[0];
 
     if (!item) {
       return {
@@ -37,7 +38,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       };
     }
 
-    // 🛑 Step 2: only cancel if still PENDING
+    // 🛑 Step 2: Only cancel if still PENDING
     await ddb.send(
       new UpdateCommand({
         TableName: TABLE_EXECUTIONS,
