@@ -4,13 +4,39 @@ import { ddb, TABLE_EXECUTIONS } from '../shared/dynamo';
 
 const MAX_ATTEMPTS = 3;
 
-async function fakeExecuteJob(jobId: string) {
-  await new Promise((res) => setTimeout(res, 1000));
-  console.log(`Executed job ${jobId}`);
-}
 
 function ttlInDays(days: number): number {
   return Math.floor(Date.now() / 1000) + days * 24 * 60 * 60;
+}
+
+async function sendTelegramMessage(text: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN!;
+  const chatId = process.env.TELEGRAM_CHAT_ID!;
+
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Telegram API failed: ${errText}`);
+  }
+}
+
+async function executeRealJob(jobId: string) {
+  await sendTelegramMessage(
+    `✅ Job executed: ${jobId}\nTime: ${new Date().toISOString()}`
+  );
+  console.log(`Executed job ${jobId}`);
 }
 
 export const handler = async (event: SQSEvent) => {
