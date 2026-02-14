@@ -81,7 +81,7 @@ export const handler = async (event: SQSEvent) => {
       }
 
       // 🟢 Execute job
-      await fakeExecuteJob(jobId);
+      await executeRealJob(jobId);
 
       // 🟢 Mark success
       await ddb.send(
