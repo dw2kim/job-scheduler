@@ -19,7 +19,8 @@
     "api/**/*",
     "worker/**/*",
     "watcher/**/*",
-    "shared/**/*"
+    "shared/**/*",
+    "cancel-job/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }
