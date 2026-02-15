@@ -22,6 +22,15 @@ export const handler = async (
     const { runAt, task, params, idempotencyKey } =
       JSON.parse(event.body);
 
+      // Parse runAt as Date, validate ISO format and future time
+      const runAtDate = new Date(runAt);
+      if (Number.isNaN(runAtDate.getTime())) {
+        return { statusCode: 400, body: 'runAt must be a valid ISO date' };
+      }
+      if (runAtDate.getTime() <= Date.now()) {
+        return { statusCode: 400, body: 'runAt must be in the future' };
+      }
+
     // ✅ Required fields
     if (!runAt || !task) {
       return {
