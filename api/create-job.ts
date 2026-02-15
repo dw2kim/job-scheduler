@@ -8,85 +8,122 @@ import { ddb, TABLE_EXECUTIONS } from '../shared/dynamo';
 function toTimeBucket(iso: string) {
   const d = new Date(iso);
   d.setSeconds(0, 0);
-  return d.toISOString().slice(0, 16);
+  return d.toISOString().slice(0, 16); // YYYY-MM-DDTHH:mm
 }
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
-  if (!event.body) {
-    return { statusCode: 400, body: 'Missing body' };
-  }
+  try {
+    if (!event.body) {
+      return { statusCode: 400, body: 'Missing body' };
+    }
 
-  const { runAt, task, params, idempotencyKey } =
-    JSON.parse(event.body);
+    const { runAt, task, params, idempotencyKey } =
+      JSON.parse(event.body);
 
-  if (!runAt || !task) {
-    return {
-      statusCode: 400,
-      body: 'runAt and task required',
-    };
-  }
+    // ✅ Required fields
+    if (!runAt || !task) {
+      return {
+        statusCode: 400,
+        body: 'runAt and task required',
+      };
+    }
 
-  if (!idempotencyKey) {
-    return {
-      statusCode: 400,
-      body: 'idempotencyKey required',
-    };
-  }
+    if (!idempotencyKey) {
+      return {
+        statusCode: 400,
+        body: 'idempotencyKey required',
+      };
+    }
 
-  // 1️⃣ Check if job already exists
-  const existing = await ddb.send(
-    new QueryCommand({
-      TableName: TABLE_EXECUTIONS,
-      IndexName: 'gsi_idempotency',
-      KeyConditionExpression:
-        'idempotencyKey = :key',
-      ExpressionAttributeValues: {
-        ':key': idempotencyKey,
-      },
-    })
-  );
+    // 🔴 CRITICAL FIX #1 — validate timestamp
+    const runAtMs = Date.parse(runAt);
+    if (Number.isNaN(runAtMs)) {
+      return {
+        statusCode: 400,
+        body: 'Invalid runAt timestamp',
+      };
+    }
 
-  if (existing.Items && existing.Items.length > 0) {
-    const job = existing.Items[0];
+    const nowMs = Date.now();
+
+    // 🔴 CRITICAL FIX #2 — prevent past jobs
+    if (runAtMs <= nowMs) {
+      return {
+        statusCode: 400,
+        body: 'runAt must be in the future',
+      };
+    }
+
+    // 🔴 CRITICAL FIX #3 — enforce UTC format
+    // (prevents timezone bugs from FE)
+    if (!runAt.endsWith('Z')) {
+      return {
+        statusCode: 400,
+        body: 'runAt must be UTC ISO format (must end with Z)',
+      };
+    }
+
+    // 1️⃣ Idempotency check
+    const existing = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_EXECUTIONS,
+        IndexName: 'gsi_idempotency',
+        KeyConditionExpression: 'idempotencyKey = :key',
+        ExpressionAttributeValues: {
+          ':key': idempotencyKey,
+        },
+      })
+    );
+
+    if (existing.Items && existing.Items.length > 0) {
+      const job = existing.Items[0];
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          jobId: job.jobId,
+          status: job.status,
+          idempotent: true,
+        }),
+      };
+    }
+
+    // 2️⃣ Create new job
+    const jobId = `job-${Date.now()}`;
+    const timeBucket = toTimeBucket(runAt);
+    const executionKey = `${runAt}#${jobId}`;
+
+    await ddb.send(
+      new PutCommand({
+        TableName: TABLE_EXECUTIONS,
+        Item: {
+          timeBucket,
+          executionKey,
+          jobId,
+          task,
+          params,
+          status: 'PENDING',
+          attempt: 0,
+          idempotencyKey,
+          createdAt: new Date().toISOString(), // ✅ nice for debugging
+        },
+      })
+    );
+
     return {
       statusCode: 200,
       body: JSON.stringify({
-        jobId: job.jobId,
-        status: job.status,
-        idempotent: true,
+        jobId,
+        status: 'PENDING',
+        idempotent: false,
       }),
     };
+  } catch (err) {
+    console.error('create-job error', err);
+    return {
+      statusCode: 500,
+      body: 'Internal server error',
+    };
   }
-
-  // 2️⃣ Create new job
-  const jobId = `job-${Date.now()}`;
-  const timeBucket = toTimeBucket(runAt);
-  const executionKey = `${runAt}#${jobId}`;
-
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE_EXECUTIONS,
-      Item: {
-        timeBucket,
-        executionKey,
-        jobId,
-        task,
-        params,
-        status: 'PENDING',
-        attempt: 0,
-        idempotencyKey,
-      },
-    })
-  );
-
-  return {
-    statusCode: 200,
-    body: JSON.stringify({
-      jobId,
-      status: 'PENDING',
-      idempotent: false,
-    }),
-  };
 };
