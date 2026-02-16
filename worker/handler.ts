@@ -32,17 +32,30 @@ async function sendTelegramMessage(text: string) {
   }
 }
 
-async function executeRealJob(jobId: string) {
-  await sendTelegramMessage(
-    `✅ Job executed: ${jobId}\nTime: ${new Date().toISOString()}`
-  );
+async function executeRealJob(jobId: string, userMessage?: string) {
+  const lines = [
+    '✅ Job executed',
+    `JobId: ${jobId}`,
+    userMessage ? `Message: ${userMessage}` : undefined,
+    `Time: ${new Date().toISOString()}`,
+  ].filter(Boolean);
+
+  await sendTelegramMessage(lines.join('\n'));
+
   console.log(`Executed job ${jobId}`);
 }
+
+type TelegramParams = {
+  message?: string;
+};
 
 export const handler = async (event: SQSEvent) => {
   for (const record of event.Records) {
     const message = JSON.parse(record.body);
-    const { timeBucket, executionKey, jobId } = message;
+    const { timeBucket, executionKey, jobId, params } = message;
+
+    const userMessage =
+      (params as TelegramParams | undefined)?.message;
 
     const receiveCount = Number(
       record.attributes.ApproximateReceiveCount ?? 1
@@ -81,7 +94,7 @@ export const handler = async (event: SQSEvent) => {
       }
 
       // 🟢 Execute job
-      await executeRealJob(jobId);
+      await executeRealJob(jobId, userMessage);
 
       // 🟢 Mark success
       await ddb.send(
